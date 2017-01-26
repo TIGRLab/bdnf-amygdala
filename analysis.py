@@ -20,21 +20,37 @@ class Vividict(dict):
         value = self[key] = type(self)() # retain local pointer to value
         return value                     # faster to return than dict lookup
 
+
 def load_surface(filename):
     """Loads surface data as v,t matrix, stripping the 1st col (an index)"""
     return(np.genfromtxt(os.path.join(DATADIR, filename))[:, 1:])
 
+
 def load_surface_roi(filename):
     return(np.genfromtxt(os.path.join(ATLASDIR, filename)))
+
 
 def load_volume(filename):
     """Loads volume data as an x,y,z,t 4D array"""
     return(nib.load(os.path.join(DATADIR, filename)).get_data())
 
+
 def mask_data(array, mask):
     """Returns roi,t matrix from nonzero elements of the mask."""
     assert array.shape[:-1] == mask.shape
     return(array[np.where(mask)])
+
+
+def append(df, row, data):
+    """
+    Appends the data list to the specified row in df, increments row, and
+    returns the incremented row value alongside the dataframe.
+    """
+    df.loc[row] = data
+    row += 1
+
+    return(df, row)
+
 
 def extract_ctx_data(ctx_roi_name, surf_l, surf_r):
     """
@@ -52,6 +68,57 @@ def extract_ctx_data(ctx_roi_name, surf_l, surf_r):
         sys.exit(1)
 
     return(ctx_data)
+
+
+def zscore(data):
+    z = (data.T - np.mean(data.T, axis=0)) / np.std(data.T, axis=0)
+    return(z.T)
+
+
+def demean(data):
+    d = (data.T - np.mean(data.T, axis=0))
+    return(d.T)
+
+
+def cancorr(ctx_data, amyg_l, amyg_r):
+    """
+    Uses regularized kernel canonical correlation analysis to extract the top
+    component from each ROI, and correlates them.
+
+    Pyrcca: regularized kernel canonical correlation analysis in Python and its
+    applications to neuroimaging. Bilenko et al, 2015, arXiv.
+
+    A depression network of functionally connected regions discovered via multi-
+    attribute canonical correlation graphs. Kang et al, 2016. Neuroimage.
+    """
+
+    n_samps = ctx_data.T.shape[0]
+    n_vox = min(amyg_l.shape[0], amyg_r.shape[0], ctx_data.shape[0])
+
+    model = cc.CCA(kernelcca=True, ktype='linear', reg = 0.1, numCC=1, verbose=False)
+
+    #ctx_train = ctx_data.T[:n_samps/2, :]
+    #ctx_test = ctx_data.T[n_samps/2:, :]
+    #amyg_l_train = amyg_l.T[:n_samps/2, :]
+    #amyg_l_test = amyg_l.T[n_samps/2:, :]
+    #amyg_r_train = amyg_r.T[:n_samps/2, :]
+    #amyg_r_test = amyg_r.T[n_samps/2:, :]
+    #model.train([ctx_train, amyg_l_train])
+    #testcorrs = model.validate([ctx_test, amyg_l_test])
+
+    # transpose method (using same number of spatial locations for each ROI)
+    # model.train([zscore(ctx_data[:n_vox, :]), zscore(amyg_l[:n_vox, :])])
+
+    model.train([zscore(ctx_data).T, zscore(amyg_l).T])
+    corr_l = model.cancorrs
+
+    # model.train([zscore(ctx_data[:n_vox, :]), zscore(amyg_r[:n_vox, :])])
+
+    model.train([zscore(ctx_data).T, zscore(amyg_r).T])
+    corr_r = model.cancorrs
+
+    return(corr_l[0], corr_r[0])
+
 
 def pca_reduce(X, n=1):
     """Uses PCA to return the top n components of the data as a matrix."""
@@ -83,51 +150,6 @@ def pca_reduce(X, n=1):
 
     return(recon)
 
-def zscore(data):
-    z = (data.T - np.mean(data.T, axis=0)) / np.std(data.T, axis=0)
-    return(z.T)
-
-def demean(data):
-    d = (data.T - np.mean(data.T, axis=0))
-    return(d.T)
-
-def cancorr(ctx_data, amyg_l, amyg_r):
-    """
-    Uses regularized kernel canonical correlation analysis to extract the top
-    component from each ROI, and correlates them.
-
-    Pyrcca: regularized kernel canonical correlation analysis in Python and its
-    applications to neuroimaging. Bilenko et al, 2015, arXiv.
-
-    A depression network of functionally connected regions discovered via multi-
-    attribute canonical correlation graphs. Kang et al, 2016. Neuroimage.
-    """
-
-    n_samps = ctx_data.T.shape[0]
-    n_vox = min(amyg_l.shape[0], amyg_r.shape[0], ctx_data.shape[0])
-
-    model = cc.CCA(kernelcca=True, ktype='linear', reg = 0.1, numCC=1, verbose=False)
-
-    #ctx_train = ctx_data.T[:n_samps/2, :]
-    #ctx_test = ctx_data.T[n_samps/2:, :]
-    #amyg_l_train = amyg_l.T[:n_samps/2, :]
-    #amyg_l_test = amyg_l.T[n_samps/2:, :]
-    #amyg_r_train = amyg_r.T[:n_samps/2, :]
-    #amyg_r_test = amyg_r.T[n_samps/2:, :]
-    #model.train([ctx_train, amyg_l_train])
-    #testcorrs = model.validate([ctx_test, amyg_l_test])
-
-    # model.train([zscore(ctx_data).T, zscore(amyg_l).T])
-    # might have made a mistake -- trying transpose method (using same number of
-    # spatial locations for each ROI)
-    model.train([zscore(ctx_data[:n_vox, :]), zscore(amyg_l[:n_vox, :])])
-    corr_l = model.cancorrs
-
-    #model.train([zscore(ctx_data).T, zscore(amyg_r).T])
-    model.train([zscore(ctx_data[:n_vox, :]), zscore(amyg_r[:n_vox, :])])
-    corr_r = model.cancorrs
-
-    return(corr_l[0], corr_r[0])
 
 def pca(ctx_data, amyg_l, amyg_r):
     """
@@ -145,6 +167,7 @@ def pca(ctx_data, amyg_l, amyg_r):
 
     return(corr[0,1], corr[0,2])
 
+
 def correlate(ctx_data, amyg_l, amyg_r):
     """Calculates the mean timeseries from all ROIs, and correlates them."""
     ctx_data = np.mean(ctx_data, axis=0)
@@ -153,6 +176,7 @@ def correlate(ctx_data, amyg_l, amyg_r):
     corr = np.corrcoef(np.vstack((ctx_data, amyg_l, amyg_r)))
 
     return(corr[0,1], corr[0,2])
+
 
 def analyze_subject(files):
     """
@@ -191,16 +215,6 @@ def analyze_subject(files):
 
     return(results)
 
-def append(df, row, data):
-    """
-    Appends the data list to the specified row in df, increments row, and
-    returns the incremented row value alongside the dataframe.
-    """
-    df.loc[row] = data
-    row += 1
-
-    return(df, row)
-
 
 def main():
     """
@@ -226,7 +240,7 @@ def main():
     row = 0
     for i, subj in enumerate(subjects):
 
-        # run the three analysis on the data
+        # run the three analysis on the data, add results row wise to output
         print('analyzing subject {}/{}'.format(i+1, len(data)))
         results = analyze_subject(data[subj])
 
@@ -238,8 +252,10 @@ def main():
             outputs, row = append(outputs, row, [subj, ctx_roi, 'pca',  'L', results[ctx_roi]['pca'][0]])
             outputs, row = append(outputs, row, [subj, ctx_roi, 'pca',  'R', results[ctx_roi]['pca'][1]])
 
-    outputs.to_csv('results.csv')
+    outputs.to_csv('results.csv', index=False)
+
 
 if __name__ == '__main__':
     main()
+
 
